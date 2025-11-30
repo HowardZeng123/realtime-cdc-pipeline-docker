@@ -1,0 +1,17 @@
+
+# Core Python Libraries
+python-dotenv==1.0.0
+jsonschema==4.19.2
+
+# Data Generation (Faker)
+faker==19.12.0
+
+# Apache Airflow & Providers
+apache-airflow==2.10.2
+apache-airflow-providers-postgres==5.7.1
+apache-airflow-providers-apache-kafka==1.10.0
+
+confluent-kafka==2.6.0
+kafka-python==2.0.2
+# Database Drivers
+clickhouse-driver==0.2.6

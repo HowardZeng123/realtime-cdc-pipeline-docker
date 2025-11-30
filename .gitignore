@@ -1,0 +1,19 @@
+# --- Bỏ qua các thư mục Data của Docker (QUAN TRỌNG) ---
+clickhouse-data/
+postgres_data/
+kafka_data/
+zookeeper_data/
+logs/
+
+# --- Bỏ qua môi trường ảo Python ---
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+
+# --- Bỏ qua file rác hệ thống ---
+.DS_Store
+*.swp
+.vscode/
+.idea/

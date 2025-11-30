@@ -1,0 +1,308 @@
+services:
+  # 🦓 Zookeeper
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.9.0
+    hostname: zookeeper
+    container_name: zookeeper1
+    ports:
+      - "2181:2181"
+    environment:
+      KAFKA_BROKER_ID: -1
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo ruok | nc localhost 2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cdc-net
+
+  # 🦩 Kafka Broker
+  broker:
+    image: confluentinc/cp-server:7.9.0
+    user: root
+    hostname: broker
+    container_name: broker1
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      CONFLUENT_METRICS_ENABLE: 'false'
+      CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
+    volumes:
+      - ./kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "bash", "-c", "nc -z localhost 9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cdc-net
+
+  # 🧩 Schema Registry
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.9.0
+    hostname: schema-registry
+    container_name: schema-registry1
+    depends_on:
+      broker:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://broker:29092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - cdc-net
+
+  # 📊 Control Center (Confluent UI)
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:7.9.0
+    hostname: control-center
+    container_name: control-center1
+    depends_on:
+      broker:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    ports:
+      - "9021:9021"
+    environment:
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: broker:29092
+      CONTROL_CENTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
+      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
+      CONFLUENT_METRICS_ENABLE: 'false'
+      PORT: 9021
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9021/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - cdc-net
+
+  # 🐘 PostgreSQL (source DB cho Debezium)
+  postgres:
+    image: postgres:16
+    container_name: postgres1
+    command: ["postgres", "-c", "wal_level=logical"]
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: 123
+      POSTGRES_DB: testdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d testdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cdc-net
+
+  data-generator:
+    build:
+      context: ./data-generator
+      dockerfile: Dockerfile
+    container_name: data-generator
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - PYTHONUNBUFFERED=1  
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=testdb
+      - DB_USER=admin
+      - DB_PASSWORD=123
+    networks:
+      - cdc-net
+    restart: unless-stopped
+
+  # 🔄 Debezium Connect (CDC)
+  connect:
+    image: debezium/connect:2.6
+    container_name: connect
+    depends_on:
+      - broker
+      - postgres
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: broker:29092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: connect_configs
+      OFFSET_STORAGE_TOPIC: connect_offsets
+      STATUS_STORAGE_TOPIC: connect_status
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
+      CONNECT_PLUGIN_PATH: /kafka/connect
+      CONNECT_DEBEZIUM_SNAPSHOT_MODE: initial
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s # Cho nó 30s để khởi động
+    networks:
+      - cdc-net
+
+  # ⚡ Spark Cluster (Master + Worker)
+  spark-master:
+    image: apache/spark:3.5.0
+    container_name: spark-master
+    volumes:
+      - ./spark-jobs:/opt/spark-jobs
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    ports:
+      - "9090:8080"
+      - "7077:7077"
+    networks:
+      - cdc-net
+
+  spark-worker:
+    image: apache/spark:3.5.0
+    container_name: spark-worker
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_MODE: worker
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 1g
+      SPARK_MASTER_URL: spark://spark-master:7077
+    networks:
+      - cdc-net
+
+  # 🎯 Spark Streaming Job (CDC Processor)
+  spark-streaming:
+    image: apache/spark:3.5.0
+    user: root
+    container_name: spark-streaming
+    depends_on:
+      spark-master:
+        condition: service_started
+      broker:
+        condition: service_started
+      clickhouse:
+        condition: service_started
+      connect:
+        condition: service_healthy
+    volumes:
+      - ./spark-jobs:/opt/spark-jobs
+      - ./spark-requirements.txt:/opt/requirements.txt
+      - ./script/spark-entrypoint.sh:/opt/spark-entrypoint.sh
+    command: /opt/spark-entrypoint.sh
+    environment:
+      KAFKA_SERVERS: broker:29092
+      CLICKHOUSE_URL: jdbc:clickhouse://clickhouse:9000/cdc_data
+    networks:
+      - cdc-net
+    restart: unless-stopped
+
+  # 🌀 Apache Airflow (Scheduler + Webserver)
+  webserver:
+    image: apache/airflow:2.9.3
+    user: root
+    container_name: airflow-webserver
+    entrypoint: /opt/airflow/script/entrypoint.sh webserver
+    command: webserver
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - LOAD_EX=n
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://admin:123@postgres:5432/testdb
+      - AIRFLOW__WEBSERVER__SECRET_KEY=this_is_a_very_secured_key
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./script/entrypoint.sh:/opt/airflow/script/entrypoint.sh:ro
+      - ./requirements.txt:/opt/airflow/requirements.txt
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 30s
+      retries: 6
+      start_period: 300s
+    networks:
+      - cdc-net
+
+  scheduler:
+    image: apache/airflow:2.9.3
+    user: root
+    container_name: airflow-scheduler
+    depends_on:
+      webserver:
+        condition: service_healthy
+    entrypoint: /opt/airflow/script/entrypoint.sh
+    command: scheduler
+    environment:
+      - LOAD_EX=n
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://admin:123@postgres:5432/testdb
+      - AIRFLOW__WEBSERVER__SECRET_KEY=this_is_a_very_secured_key
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      # Nhớ giữ :ro cho an toàn
+      - ./script/entrypoint.sh:/opt/airflow/script/entrypoint.sh:ro
+      - ./requirements.txt:/opt/airflow/requirements.txt
+      # Giữ lại docker socket để trigger Spark
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - cdc-net
+
+  # 📊 ClickHouse
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: clickhouse
+    ports:
+      - "8123:8123"   # HTTP interface
+      - "9000:9000"   # Native interface
+    environment:
+      - CLICKHOUSE_USER=admin
+      - CLICKHOUSE_PASSWORD=admin
+    volumes:
+      - ./clickhouse-data:/var/lib/clickhouse
+      # - ./init-clickhouse.sql:/docker-entrypoint-initdb.d/init-clickhouse.sql
+    networks:
+      - cdc-net
+
+networks:
+  cdc-net:
+    driver: bridge
