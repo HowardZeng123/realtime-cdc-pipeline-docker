@@ -15,7 +15,7 @@ Orchestration: Apache Airflow 2.10
 
 ## Installation & Running
 1. Clone the repository
-git clone 
+git clone git@github.com:HowardZeng123/realtime-cdc-pipeline-docker.git
 cd realtime-cdc-pipeline-docker
 2. Grant permissions (Linux/WSL only)
 chmod +x script/*.sh
