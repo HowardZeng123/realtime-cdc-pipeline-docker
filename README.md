@@ -5,6 +5,14 @@ An End-to-End Data Engineering project that simulates an E-commerce platform, ca
 The pipeline follows a modern **Kappa Architecture** pattern:
 <img width="1054" height="403" alt="image" src="https://github.com/user-attachments/assets/3e4faa18-326d-40ec-809e-8df55ab5d541" />
 
+Data Source (Mock E-commerce): A Python script generating random Customers, Products, Orders, and Order Items.
+OLTP Database: PostgreSQL 16 (configured with wal_level=logical).
+Ingestion (CDC): Debezium (running on Kafka Connect) captures row-level changes.
+Message Broker: Confluent Kafka & Zookeeper.
+Stream Processing: Apache Spark 3.5 (PySpark) reads from Kafka, flattens JSON payloads, handles CDC logic (insert/update/delete), and writes to ClickHouse.
+OLAP Sink: ClickHouse (MergeTree engine) for high-performance analytics.
+Orchestration: Apache Airflow 2.10 managing batch jobs and reporting.
+
 ## Tech Stack
 Language: Python (PySpark, Faker, Airflow DAGs)
 Containerization: Docker, Docker Compose
